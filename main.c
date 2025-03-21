@@ -1,167 +1,149 @@
+//Compile with:
+/*
+    gcc -o controller_state main.c \
+    -I/opt/homebrew/opt/openssl@3/include \
+    -L/opt/homebrew/opt/openssl@3/lib \
+    -I/opt/homebrew/Cellar/hidapi/0.14.0/include/hidapi \
+    -I/opt/homebrew/Cellar/cjson/1.7.18/include/cjson \
+    -I/opt/homebrew/include/SDL2 \
+    -I/opt/homebrew/Cellar/libwebsockets/4.3.5/include \
+    -L/opt/homebrew/Cellar/hidapi/0.14.0/lib -lhidapi \
+    -L/opt/homebrew/Cellar/cjson/1.7.18/lib -lcjson \
+    -L/opt/homebrew/lib -lSDL2 \
+    -L/opt/homebrew/lib -lwebsockets \
+    -lssl -lcrypto
+
+    Then:
+
+    ./controller_state
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <SDL.h>
 #include <hidapi.h>
 #include <cJSON.h>
 #include <unistd.h>
-#include <curl/curl.h> // Add libcurl for HTTP requests
+#include <libwebsockets.h>
+#include <string.h>
 
-// ESP32's IP
-#define ESP32_IP "172.20.10.3"
+// WebSocket server IP and port
+#define SERVER_IP "18ee-181-174-72-222.ngrok-free.app"
+#define SERVER_PORT 443
 
-// Firebase API Key
-#define FIREBASE_API_KEY "API"
-//#define FIREBASE_API_KEY "API"
-
-// Firebase URL
-#define FIREBASE_URL "URL"
-//#define FIREBASE_URL "URL"
-
-
-// Firebase email
-#define EMAIL "EMAIL"
-
-// Firebase Pass
-#define PASS "PASS"
-
-// Response buffer for authentication
+// Response buffer for WebSocket
 #define RESPONSE_BUFFER_SIZE 4096
 
-// Compile with:
-//gcc -o controller_state main.c \
-//    -I/opt/homebrew/Cellar/hidapi/0.14.0/include/hidapi \
-//    -L/opt/homebrew/Cellar/hidapi/0.14.0/lib -lhidapi \
-//    -I/opt/homebrew/Cellar/cjson/1.7.18/include/cjson \
-//    -L/opt/homebrew/Cellar/cjson/1.7.18/lib -lcjson \
-//    -I/opt/homebrew/include/SDL2 \
-//    -L/opt/homebrew/lib -lSDL2
+// Global WebSocket context and client
+struct lws_context *context;
+struct lws *websocket;
+int connection_established = 0; // Flag to track connection status
 
-// Write callback for curl response
-static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-    size_t total_size = size * nmemb;
-    strncat((char *)userp, (char *)contents, total_size);
-    return total_size;
+// Callback for WebSocket events
+static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
+                               void *user, void *in, size_t len) {
+    switch (reason) {
+        case LWS_CALLBACK_CLIENT_ESTABLISHED:
+            printf("WebSocket Connection Established\n");
+            connection_established = 1; // Set connection flag
+            break;
+        case LWS_CALLBACK_CLIENT_RECEIVE:
+            printf("Received message: %s\n", (char *)in);
+            break;
+        case LWS_CALLBACK_CLIENT_WRITEABLE:
+            // WebSocket is ready to send a message
+            break;
+        case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+            printf("WebSocket Connection Error\n");
+            connection_established = 0; // Reset connection flag
+            break;
+        case LWS_CALLBACK_CLOSED:
+            printf("WebSocket Closed\n");
+            connection_established = 0; // Reset connection flag
+            break;
+        default:
+            break;
+    }
+    return 0;
 }
 
-// Authenticate with Firebase and get token
-char* authenticate_with_firebase(const char* email, const char* password) {
-    CURL *curl;
-    CURLcode res;
-    char *token = NULL;
-    char response[RESPONSE_BUFFER_SIZE] = {0};  // Initialize response buffer
+// WebSocket protocol structure
+static struct lws_protocols protocols[] = {
+    {
+        "example-protocol",
+        callback_websocket,
+        0,
+        RESPONSE_BUFFER_SIZE,
+    },
+    { NULL, NULL, 0, 0 }
+};
 
-    char url[256];
-    snprintf(url, sizeof(url),
-             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=%s",
-             FIREBASE_API_KEY);
-
-    char post_data[512];
-    snprintf(post_data, sizeof(post_data),
-             "{\"email\":\"%s\",\"password\":\"%s\",\"returnSecureToken\":true}",
-             email, password);
-
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl = curl_easy_init();
-    
-    if (curl) {
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
-
-        res = curl_easy_perform(curl);
-        if (res == CURLE_OK) {
-            printf("Firebase Auth Response: %s\n", response);  // Print full response
-            cJSON *json = cJSON_Parse(response);
-            cJSON *token_json = cJSON_GetObjectItem(json, "idToken");
-            if (token_json) {
-                token = strdup(token_json->valuestring);
-                printf("Authentication successful! Token: %s\n", token);
-            } else {
-                fprintf(stderr, "Failed to retrieve ID token. Firebase response: %s\n", response);
-            }
-            cJSON_Delete(json);
-        } else {
-            fprintf(stderr, "Authentication failed: %s\n", curl_easy_strerror(res));
+// Send JSON data via WebSocket
+void send_json_via_websocket(const char *json_str) {
+    if (websocket && connection_established) {
+        int len = strlen(json_str);
+        unsigned char *msg = (unsigned char *)malloc(LWS_PRE + len + 1);
+        if (!msg) {
+            fprintf(stderr, "Failed to allocate memory for WebSocket message\n");
+            return;
         }
-
-
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
+        memcpy(msg + LWS_PRE, json_str, len + 1); // Copy message after LWS_PRE
+        lws_write(websocket, msg + LWS_PRE, len, LWS_WRITE_TEXT);
+        free(msg);
     }
-
-    curl_global_cleanup();
-    return token;
 }
 
-// Send JSON data to Firebase
-void send_json_to_firebase(const char* json_str, const char* id_token) {
-    if (!id_token) {
-        fprintf(stderr, "Error: Firebase authentication token is NULL.\n");
-        return;
+// Initialize WebSocket connection
+int init_websocket_connection() {
+    struct lws_context_creation_info info;
+    memset(&info, 0, sizeof(info));
+
+    info.port = CONTEXT_PORT_NO_LISTEN;
+    info.protocols = protocols;
+    info.options |= LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;  // Ensure SSL is initialized
+
+    context = lws_create_context(&info);
+    if (context == NULL) {
+        fprintf(stderr, "WebSocket context creation failed\n");
+        return -1;
     }
 
-    CURL *curl;
-    CURLcode res;
+    struct lws_client_connect_info client_info = {0};
+    client_info.context = context;
+    client_info.address = SERVER_IP;  // ngrok URL
+    client_info.port = SERVER_PORT;   // Use 443 for WSS
+    client_info.path = "/";           // WebSocket endpoint
+    client_info.host = SERVER_IP;
+    client_info.origin = SERVER_IP;
+    client_info.protocol = protocols[0].name;
+    client_info.ssl_connection = LCCSCF_USE_SSL;  // Enable SSL
 
-    char url[512];
-    snprintf(url, sizeof(url), 
-             FIREBASE_URL "controller.json?auth=%s", id_token);
+    websocket = lws_client_connect_via_info(&client_info);
 
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl = curl_easy_init();
-
-    if (curl) {
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str);
-        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-
-        res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            fprintf(stderr, "Failed to send JSON: %s\n", curl_easy_strerror(res));
-        } else {
-            char response[RESPONSE_BUFFER_SIZE] = {0};  // Store Firebase response
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);  // Capture response
-            printf("Firebase Response: %s\n", response);  // Debugging
-
-            if (strstr(response, "error")) {  // Check for error in Firebase response
-                fprintf(stderr, "Firebase Error: %s\n", response);
-            } else {
-                printf("Data successfully sent to Firebase!\n");
-            }
-        }
-
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
+    if (!websocket) {
+        fprintf(stderr, "Failed to connect to WebSocket server\n");
+        return -1;
     }
 
-    curl_global_cleanup();
+    // Wait for the connection to be established
+    int timeout = 5000; // 5 seconds
+    while (!connection_established && timeout > 0) {
+        lws_service(context, 100); // Poll WebSocket events
+        usleep(1000); // Sleep for 1ms
+        timeout -= 100;
+    }
+
+    if (!connection_established) {
+        fprintf(stderr, "WebSocket connection timed out\n");
+        return -1;
+    }
+
+    return 0;
 }
 
 int main(void) {
-    char* Token = authenticate_with_firebase(EMAIL, PASS);
-    if (Token) {
-        printf("Using Token: %s\n", token);
-    } else {
-        fprintf(stderr, "No authentication token available!\n");
-    }
-
-    if (!Token) {
-        fprintf(stderr, "Error: Unable to authenticate with Firebase.\n");
-        return 1;
-    }
-
     if (SDL_Init(SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "Failed to initialize SDL: %s\n", SDL_GetError());
-        free(Token);  // Free token before exiting
         return 1;
     }
 
@@ -179,12 +161,18 @@ int main(void) {
     if (!controller) {
         fprintf(stderr, "No controller found!\n");
         SDL_Quit();
-        free(Token);
+        return 1;
+    }
+
+    // Initialize WebSocket
+    if (init_websocket_connection() != 0) {
+        SDL_GameControllerClose(controller);
+        SDL_Quit();
         return 1;
     }
 
     while (1) {
-        SDL_GameControllerUpdate();
+        SDL_GameControllerUpdate(); // Poll controller state
 
         cJSON *root = cJSON_CreateObject();
 
@@ -205,18 +193,21 @@ int main(void) {
         // Convert JSON object to string
         char *json_str = cJSON_Print(root);
         if (json_str) {
-            send_json_to_firebase(json_str, Token);
+            send_json_via_websocket(json_str);
             free(json_str);
         }
 
         cJSON_Delete(root);
 
-        // Sleep for 500ms (Reduce request frequency)
-        usleep(500000);
+        // Poll WebSocket events
+        lws_service(context, 0);
+
+        // Reduce sleep time to minimize delay
+        usleep(1000); // Sleep for 1ms
     }
 
+    lws_context_destroy(context);
     SDL_GameControllerClose(controller);
     SDL_Quit();
-    free(Token);  // Free allocated memory
     return 0;
 }

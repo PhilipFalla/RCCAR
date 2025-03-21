@@ -1,10 +1,11 @@
+// node text.js
+
 const WebSocket = require('ws');
 
-const socket = new WebSocket("ws://localhost:8080");
+const socket = new WebSocket("wss://936a-138-117-143-165.ngrok-free.app");
 
 socket.onopen = () => {
     console.log("Connected to WebSocket server");
-    socket.send("Hello, server!");
 };
 
 socket.onmessage = (event) => {
