@@ -1,48 +1,47 @@
 #include <WiFi.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <ArduinoJson.h>
+#include <WebSocketsClient.h>
 
-// ESP32 IP
+const char* ssid = "id";
+const char* password = "pass";
+const char* websocket_server = "ws://your_server_ip:8080";
 
-const char* IP = "172.20.10.3";
-
-// WiFi credentials
-const char* ssid = "Philip";
-const char* password = "simedas100pesos";
-
-// Set up the web server on port 80
-AsyncWebServer server(80);
+WebSocketsClient webSocket;
 
 void setup() {
-    Serial.begin(115200);
-    
-    // Connect to WiFi
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println("\nConnected to WiFi!");
-    Serial.print("ESP32 IP: ");
-    Serial.println(WiFi.localIP());
+    const int max = 32767;
+    const int min = -32768;
+    int drive = 5;
+    int input = 0;
 
-    // Handle incoming JSON data via HTTP POST
-    server.on("/controller", HTTP_POST, [](AsyncWebServerRequest *request){
-        request->send(200, "text/plain", "JSON Received");
-    }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-        // Convert received data into a string
-        String jsonStr;
-        for (size_t i = 0; i < len; i++) {
-            jsonStr += (char)data[i];
-        }
-        Serial.println("Received JSON:");
-        Serial.println(jsonStr);
-    });
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
 
-    // Start server
-    server.begin();
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+
+  webSocket.begin(websocket_server);
+
+  webSocket.onEvent(webSocketEvent);
 }
 
 void loop() {
+  webSocket.loop();
+}
+
+void webSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.println("Disconnected from WebSocket server");
+      break;
+    case WStype_CONNECTED:
+      Serial.println("Connected to WebSocket server");
+      break;
+    case WStype_TEXT:
+      Serial.println("Received text: ");
+      Serial.println((char*)payload);
+      break;
+  }
 }
