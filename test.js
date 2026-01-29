@@ -2,7 +2,7 @@
 
 const WebSocket = require('ws');
 
-const socket = new WebSocket("wss://641a-138-117-143-165.ngrok-free.app");
+const socket = new WebSocket("wss://0e99-200-0-176-84.ngrok-free.app");
 
 socket.onopen = () => {
     console.log("Connected to WebSocket server");

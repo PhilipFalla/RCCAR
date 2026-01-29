@@ -5,7 +5,7 @@ import websockets
 import ssl  # Added for SSL handling
 
 # WebSocket server configuration
-SERVER_IP = "2c47-138-117-143-165.ngrok-free.app"
+SERVER_IP = "b650-200-0-176-84.ngrok-free.app"
 SERVER_PORT = 443
 WS_URI = f"wss://{SERVER_IP}:{SERVER_PORT}/"
 
@@ -94,8 +94,8 @@ def main():
                         }
                     },
                     "triggers": {
-                        "left": (controller.get_axis(4) + 1) / 2 * 32767,  # Convert -1 to 1 range to 0 to 32767
-                        "right": (controller.get_axis(5) + 1) / 2 * 32767  # Convert -1 to 1 range to 0 to 32767
+                        "left": (controller.get_axis(4) + 1) / 2 * 255,  # Convert 0 to 255 range from 0 to 32767
+                        "right": (controller.get_axis(5) + 1) / 2 * 255  # Convert 0 to 255 range from 0 to 32767
                     }
                 }
                 
